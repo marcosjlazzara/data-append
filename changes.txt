@@ -1,0 +1,27 @@
+notes
+
+# 5/1  
+- what to add in "campaign" column?
+- keep strings so it wont change to dates when numbers are similar 
+DONE
+
+# 5/2 
+- We got the yaml file with the zip file that allows windows user to run the script in a few clicks
+
+- I need to merge all the tabs in the work laptop. 
+    - make all the tabs in one master file
+    - see how it looks like
+    - What Antara wants to keep and what she doesn't
+    - Any calculations? 
+
+
+# 5/3
+- we did few fixes
+    - timestamp, atomic write via .tmp, duiplicate target column warning, misleading original file preserved. 
+- still to do the merge of all tabs in the bigger file
+- for next sessions ask claude to "let's continue wit hthe bugs #5-10" he knows:
+    - umatcthec column message (too early)
+    - multi sheet
+    - mixed format no warning
+    - silet re-prompt
+    - two minor dedup edge cases

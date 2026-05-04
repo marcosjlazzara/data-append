@@ -37,7 +37,23 @@ The pipeline is split across four modules with strict separation of concerns:
 - Both `master_df` and `new_rows` are deduplicated with `df.loc[:, ~df.columns.duplicated()]` before any `pd.concat` call — source files with duplicate column names are a known real-world input.
 - `append_to_master()` returns `(int, Path)` — the row count and the path of the newly created file. `main.py` unpacks both.
 - All `pd.read_csv` and `pd.read_excel` calls use `parse_dates=False` to prevent pandas from silently coercing numeric or string values into dates.
+- `append_to_master()` writes to a `.tmp` file first, then renames via `os.replace()` — do not revert to a direct `to_csv(new_path)` call, as a mid-write crash would corrupt the output file.
+- `confirm_column_mapping()` checks for duplicate target columns before returning and drops the second mapping with a warning — two source columns cannot map to the same master column.
 
 ## Output naming
 
-New master files are written as `<original_stem>_<YYYY-MM-DD_HH-MM>.csv` in the same folder as the source master. The original master is never modified.
+New master files are written as `<original_stem>_<YYYY-MM-DD_HH-MM-SS>.csv` in the same folder as the source master. The original master is never modified.
+
+## Driver Name
+
+After the source file loads, the user is prompted to enter a Driver Name. This value is inserted as the first column (Column A) of all newly appended rows. Existing master rows get `NaN` for this column. The prompt loops until a non-empty value is entered.
+
+## Distribution (Windows EXE)
+
+The app is packaged as a standalone Windows `.exe` using PyInstaller via GitHub Actions.
+
+- **Repo:** https://github.com/marcosjlazzara/data-append
+- **Workflow:** `.github/workflows/build.yml` — triggers on every push to `main`, builds on a Windows runner, uploads `main.exe` as a downloadable artifact
+- **To get a new build:** push code changes → go to Actions tab → download artifact zip → unzip → send `main.exe` to user
+- **User requirements:** nothing — no Python, no libraries needed on the user's machine
+- Developer is on Mac; end users are on Windows.

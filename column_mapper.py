@@ -255,6 +255,8 @@ def confirm_column_mapping(
 
         while True:
             raw = input("  Your choice: ").strip().lower()
+            if not raw:
+                console,print(" Your choice: ").strip().lower()
             if raw == "none":
                 selected_low: list[ColumnMatch] = []
                 break
@@ -300,6 +302,17 @@ def confirm_column_mapping(
         console.print("  [yellow]No columns mapped — nothing will be appended.[/yellow]")
 
     logger.info("Column mapping confirmed | mapped=%d total=%d", len(mapping), len(matches))
+    seen_targets: dict[str, str ] = {}
+    for src, dst in list(mapping.items()):
+            if dst in seen_targets:
+                    console.print(
+                        f"  [yellow]Warning: [/yellow] '[cyan]{src}[/cyan]' and "
+                        f" '[cyan]{seen_targets[dst]}[/cyan]' both map to '[cyan]{dst}[/cyan]'. "
+                        f" '[cyan]{src}[/cyan]' will be skipped"
+                    )
+                    del mapping[src]
+            else:
+                    seen_targets[dst] = src
     return mapping
 
 

@@ -97,7 +97,7 @@ def load_source_file(path: str | Path) -> pd.DataFrame:
 
 def find_latest_master(folder: str | Path) -> Optional[Path]:
     """
-    Return the most recently modified CSV or Excel file in folder, or None if none exist.
+    Return the most recently modified CSV, or excel or None if none exist.
 
     Uses mtime (modification time). Files touched with a backdated mtime may
     cause the wrong file to be selected — acceptable for this pipeline's use case.
@@ -179,7 +179,7 @@ def append_to_master(
     """
     from datetime import datetime
 
-    timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M")
+    timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
     new_filename = f"{output_path.stem}_{timestamp}.csv"
     new_path = output_path.parent / new_filename
 
@@ -190,7 +190,12 @@ def append_to_master(
     logger.debug(
         "Writing new master | path=%s total_rows=%d", new_path, len(combined)
     )
-    combined.to_csv(new_path, index=False)
+    
+    # write to a .tpm file first then atomically renames it to final name in case process crashes mid-write 
+    tmp_path = new_path.with_suffix(".tmp")
+    combined.to_csv(tmp_path, index=False)
+    os.replace(tmp_path, new_path)
+    
 
     logger.info(
         "New master created | output=%s rows_appended=%d total_rows=%d",

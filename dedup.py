@@ -7,12 +7,9 @@ Responsibilities:
     - prompt_dedup_decision: Ask the user how to handle detected duplicates.
 
 Normalization note:
-    NaN values in object columns are converted to the string "nan" by astype(str).
-    Two rows that are both NaN in a key column will therefore be treated as
-    duplicates of each other.  This is intentional: a row with all-null key fields
-    is ambiguous and conservative dedup is safer than silently appending many
-    null-keyed rows.  If this behavior is undesirable, callers should drop or
-    fill NaN values in the subset columns before calling find_duplicate_rows.
+    Nan values in object columns are kept as Nan (not converted to the string "nan").
+    pandas duplicated() treats two Nan cells as equal, so two rows that are both Nan in a key column
+    are still treated as duplicates of each other
 """
 
 from __future__ import annotations
@@ -45,7 +42,7 @@ def normalize_for_comparison(df: pd.DataFrame) -> pd.DataFrame:
     for col in result.columns:
         col_data = result[col]
         if isinstance(col_data, pd.Series) and col_data.dtype == object:
-            result[col] = col_data.astype(str).str.strip().str.lower()
+            result[col] = col_data.str.strip().str.lower()
     return result
 
 

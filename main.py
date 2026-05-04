@@ -196,22 +196,24 @@ def main() -> None:
         )
     else:
         master_cols = list(master_df.columns)
-
-        # Warn about master columns that the source has no mapping for — those
-        # columns will be NaN in all newly appended rows.
+        
+    
         matches = compute_fuzzy_matches(selected_cols, master_cols)
-        mapped_master_cols = {m.master_col for m in matches if m.master_col is not None}
+        mapping = confirm_column_mapping(matches, master_cols)
+        
+        # Warn about master columns that the source has no mapping for - those
+        # columns will be Nan in all newly appended rows.
+        
+        mapped_master_cols = set(mapping.values())
         unmatched_master_cols = [c for c in master_cols if c not in mapped_master_cols]
         if unmatched_master_cols:
-            console.print(
-                f"\n  [yellow]Note:[/yellow] {len(unmatched_master_cols)} master "
-                f"column(s) have no matching source column and will be "
-                f"[yellow]NaN[/yellow] in all new rows: "
-                + ", ".join(f"[cyan]{c}[/cyan]" for c in unmatched_master_cols)
-            )
-
-        mapping = confirm_column_mapping(matches, master_cols)
-
+                console.print(                                                                                                          
+                  f"\n  [yellow]Note:[/yellow] {len(unmatched_master_cols)} master "
+                  f"column(s) have no matching source column and will be "                                                            
+                  f"[yellow]NaN[/yellow] in all new rows: "                                                                           
+                  + ", ".join(f"[cyan]{c}[/cyan]" for c in unmatched_master_cols)
+              )                                  
+            
         # Warn about "new" columns (source columns the user mapped as 'new') —
         # these will be added to the master and all existing rows will be NaN.
         new_cols = [src for src, dst in mapping.items() if src == dst and dst not in master_cols]
@@ -237,6 +239,10 @@ def main() -> None:
     # 6. Duplicate detection
     # ------------------------------------------------------------------
     if not master_df.empty:
+        console.print(
+            "\n [dim]Note: Driver Name is included in duplicate comparison - "
+            "records from differenet drivers are never flagged as duplicate. [/dim]"
+        )
         dupe_index = find_duplicate_rows(mapped_df, master_df)
         dupe_count = len(dupe_index)
 
@@ -278,12 +284,10 @@ def main() -> None:
 
     console.print()
     console.rule("[bold green]Done[/bold green]")
-    console.print(
-        f"  [green]{rows_written:,}[/green] row(s) appended.\n"
-        f"  Original master preserved: [cyan]{master_path.name}[/cyan]\n"
-        f"  New master created:        [cyan]{new_master_path.name}[/cyan]"
-    )
-
+    console,print(f" [green]{rows_written:,}[/green] row(s) appended")
+    if not master_df.empty:
+        console.print(f" Original master preserved: [cyan]{master_path.name}[/cyan]")
+    console.print(f" New master created: [cyan]{new_master_path.name}[/cyan]")
 
 if __name__ == "__main__":
     main()
