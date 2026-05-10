@@ -86,11 +86,15 @@ def pick_folder(title: str) -> Path:
 
 def prompt_driver_name() -> str:
     """Prompt until the user enters a non-empty driver name."""
-    while True:
-        name = input("Enter Driver Name: ").strip()
-        if name:
-            return name
-        console.print("[yellow]Driver Name cannot be blank. Please enter a name.[/yellow]")
+    try:
+        while True:
+            name = input("Enter Brand Name: ").strip()
+            if name:
+                return name
+            console.print("[yellow]Driver Name cannot be blank. Please enter a name.[/yellow]")
+    except EOFError:
+        console.print("\n[red]Input closed unexpectedly. Exiting.[/red]")
+        sys.exit(1)
 
 
 def main() -> None:
@@ -99,7 +103,7 @@ def main() -> None:
     # ------------------------------------------------------------------
     # 1. Load source file
     # ------------------------------------------------------------------
-    console.print("\nSelect the source file (.xlsx or .csv)...")
+    console.print("\nSelect the Unify exported file (.xlsx or .csv)...")
     source_path = pick_file("Select source file")
     try:
         source_df = load_source_file(source_path)
@@ -153,9 +157,10 @@ def main() -> None:
             f"[yellow]No CSV files found in '{master_folder}'.[/yellow]"
         )
         default_name = master_folder / "master.csv"
-        raw_new = input(
-            f"Path for new master file [{default_name}]: "
-        ).strip()
+        try:
+            raw_new = input(f"Path for new master file [{default_name}]: ").strip()
+        except EOFError:
+            raw_new = ""
         master_path = Path(raw_new).expanduser() if raw_new else default_name
 
         master_df = pd.DataFrame()
@@ -233,7 +238,13 @@ def main() -> None:
     # 5. Apply mapping
     # ------------------------------------------------------------------
     mapped_df = apply_column_mapping(source_df, mapping)
-    mapped_df.insert(0, "Driver Name", driver_name)
+    if "Driver Name" in mapped_df.columns:
+        console.print(
+            "  [dim]Driver Name column found in source file — using source values "
+            "(prompt value ignored).[/dim]"
+        )
+    else:
+        mapped_df.insert(0, "Driver Name", driver_name)
 
     # ------------------------------------------------------------------
     # 6. Duplicate detection
@@ -284,7 +295,7 @@ def main() -> None:
 
     console.print()
     console.rule("[bold green]Done[/bold green]")
-    console,print(f" [green]{rows_written:,}[/green] row(s) appended")
+    console.print(f" [green]{rows_written:,}[/green] row(s) appended")
     if not master_df.empty:
         console.print(f" Original master preserved: [cyan]{master_path.name}[/cyan]")
     console.print(f" New master created: [cyan]{new_master_path.name}[/cyan]")

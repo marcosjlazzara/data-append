@@ -15,6 +15,7 @@ Dependencies:
 from __future__ import annotations
 
 import logging
+import sys
 from dataclasses import dataclass  # 'field' was imported but never used — removed
 from typing import Optional
 
@@ -34,6 +35,7 @@ class ColumnMatch:
     master_col: Optional[str]
     score: float
     confirmed: bool = False
+    conflict_note: str = ""  # set when bumped from auto-accept due to a conflict
 
 
 def compute_fuzzy_matches(
@@ -87,50 +89,52 @@ def prompt_column_selection(source_df: pd.DataFrame) -> list[str]:
     for i, col in enumerate(cols):
         console.print(f"  [{i}] {col}")
 
-    while True:
-        raw = input(
-            "\nEnter column indices (comma-separated) or 'all': "
-        ).strip()
+    try:
+        while True:
+            raw = input(
+                "\nEnter column indices (comma-separated) or 'all': "
+            ).strip()
 
-        if raw.lower() == "all":
-            logger.debug("User selected all %d columns", len(cols))
-            return cols
+            if raw.lower() == "all":
+                logger.debug("User selected all %d columns", len(cols))
+                return cols
 
-        parts = [p.strip() for p in raw.split(",") if p.strip()]
-        if not parts:
-            console.print("[red]No input provided. Try again.[/red]")
-            continue
+            parts = [p.strip() for p in raw.split(",") if p.strip()]
+            if not parts:
+                console.print("[red]No input provided. Try again.[/red]")
+                continue
 
-        valid = True
-        indices: list[int] = []
-        for part in parts:
-            if part.isdigit():
-                idx = int(part)
-                if 0 <= idx < len(cols):
-                    indices.append(idx)
+            valid = True
+            indices: list[int] = []
+            for part in parts:
+                if part.isdigit():
+                    idx = int(part)
+                    if 0 <= idx < len(cols):
+                        indices.append(idx)
+                    else:
+                        console.print(
+                            f"[red]Index {idx} out of range (0-{len(cols)-1}).[/red]"
+                        )
+                        valid = False
+                        break
                 else:
                     console.print(
-                        f"[red]Index {idx} out of range (0-{len(cols)-1}).[/red]"
+                        f"[red]'{part}' is not a valid index. Enter numbers or 'all'.[/red]"
                     )
                     valid = False
                     break
-            else:
-                console.print(
-                    f"[red]'{part}' is not a valid index. Enter numbers or 'all'.[/red]"
-                )
-                valid = False
-                break
 
-        if valid and indices:
-            seen: set[int] = set()
-            deduped = [i for i in indices if not (i in seen or seen.add(i))]
-            selected = [cols[i] for i in deduped]
-            logger.debug("User selected columns | count=%d cols=%r", len(selected), selected)
-            return selected
+            if valid and indices:
+                seen: set[int] = set()
+                deduped = [i for i in indices if not (i in seen or seen.add(i))]
+                selected = [cols[i] for i in deduped]
+                logger.debug("User selected columns | count=%d cols=%r", len(selected), selected)
+                return selected
 
-        # Explicitly continue so a future refactor cannot accidentally fall
-        # through and return None from this function.
-        continue
+            continue
+    except EOFError:
+        console.print("\n[red]Input closed unexpectedly. Exiting.[/red]")
+        sys.exit(1)
 
 
 def _confirm_single_match(
@@ -142,50 +146,54 @@ def _confirm_single_match(
     """
     has_suggestion = m.master_col is not None
 
-    while True:
-        if has_suggestion:
-            prompt = (
-                f"  Row {row_num} — \"{m.source_col}\" → \"{m.master_col}\" "
-                f"(score {m.score:.0f}). Accept? [Enter/override/skip/new]: "
-            )
-        else:
-            prompt = (
-                f"  Row {row_num} — \"{m.source_col}\" → NO MATCH. "
-                "Type a master column, 'skip', or 'new': "
-            )
+    try:
+        while True:
+            if has_suggestion:
+                prompt = (
+                    f"  Row {row_num} — \"{m.source_col}\" → \"{m.master_col}\" "
+                    f"(score {m.score:.0f}). Accept? [Enter/override/skip/new]: "
+                )
+            else:
+                prompt = (
+                    f"  Row {row_num} — \"{m.source_col}\" → NO MATCH. "
+                    "Type a master column, 'skip', or 'new': "
+                )
 
-        raw = input(prompt).strip()
+            raw = input(prompt).strip()
 
-        if raw == "" and has_suggestion:
-            logger.debug("Accepted suggestion | %r -> %r", m.source_col, m.master_col)
-            return m.master_col
+            if raw == "" and has_suggestion:
+                logger.debug("Accepted suggestion | %r -> %r", m.source_col, m.master_col)
+                return m.master_col
 
-        if raw == "" and not has_suggestion:
+            if raw == "" and not has_suggestion:
+                console.print(
+                    "    [red]No suggestion available. Type a column name, 'skip', or 'new'.[/red]"
+                )
+                continue
+
+            lower = raw.lower()
+
+            if lower == "skip":
+                logger.debug("Skipped column | source_col=%r", m.source_col)
+                return None
+
+            if lower == "new":
+                console.print(f"    [dim]New column '{m.source_col}' will be created in master.[/dim]")
+                logger.debug("New column | source_col=%r", m.source_col)
+                return m.source_col
+
+            canonical = master_cols_lower.get(lower)
+            if canonical is not None:
+                logger.debug("Override | %r -> %r", m.source_col, canonical)
+                return canonical
+
             console.print(
-                "    [red]No suggestion available. Type a column name, 'skip', or 'new'.[/red]"
+                f"    [red]'{raw}' not found in master columns. "
+                "Try again, or type 'skip'/'new'.[/red]"
             )
-            continue
-
-        lower = raw.lower()
-
-        if lower == "skip":
-            logger.debug("Skipped column | source_col=%r", m.source_col)
-            return None
-
-        if lower == "new":
-            console.print(f"    [dim]New column '{m.source_col}' will be created in master.[/dim]")
-            logger.debug("New column | source_col=%r", m.source_col)
-            return m.source_col
-
-        canonical = master_cols_lower.get(lower)
-        if canonical is not None:
-            logger.debug("Override | %r -> %r", m.source_col, canonical)
-            return canonical
-
-        console.print(
-            f"    [red]'{raw}' not found in master columns. "
-            "Try again, or type 'skip'/'new'.[/red]"
-        )
+    except EOFError:
+        console.print("\n[red]Input closed unexpectedly. Exiting.[/red]")
+        sys.exit(1)
 
 
 def confirm_column_mapping(
@@ -196,6 +204,12 @@ def confirm_column_mapping(
     numbered list and let the user choose which to include, then confirm each
     selected one individually.
 
+    Conflicts — two source columns both scoring >= 80 against the same master
+    column — are resolved before the auto-accept table is shown: the higher-
+    scoring source column is kept; the lower-scoring one is moved to the manual-
+    review section with a conflict note. Ties send all competing columns to
+    manual review.
+
     Args:
         matches: Output of compute_fuzzy_matches.
         master_cols: Full list of master column names (for override validation).
@@ -205,6 +219,8 @@ def confirm_column_mapping(
         Skipped columns are absent from the dict.
         "new" columns map source_col -> source_col.
     """
+    from collections import defaultdict
+
     HIGH_CONFIDENCE = 80.0
 
     high = [m for m in matches if m.score >= HIGH_CONFIDENCE]
@@ -213,27 +229,97 @@ def confirm_column_mapping(
     master_cols_lower = {c.lower(): c for c in master_cols}
     mapping: dict[str, str] = {}
 
+    # ── Resolve high-confidence conflicts before auto-accepting ───────────────
+    target_groups: dict[str, list[ColumnMatch]] = defaultdict(list)
+    for m in high:
+        target_groups[m.master_col].append(m)
+
+    clean_high: list[ColumnMatch] = []
+    winner_notes: dict[str, str] = {}  # source_col -> note shown in auto-accept table
+    bumped: list[ColumnMatch] = []
+
+    for master_col, group in target_groups.items():
+        if len(group) == 1:
+            clean_high.append(group[0])
+        else:
+            logger.warning(
+                "High-confidence conflict | master_col=%r competing_sources=%r",
+                master_col, [m.source_col for m in group],
+            )
+            group_sorted = sorted(group, key=lambda m: m.score, reverse=True)
+            top_score = group_sorted[0].score
+            winners = [m for m in group_sorted if m.score == top_score]
+            losers  = [m for m in group_sorted if m.score != top_score]
+
+            if len(winners) == 1:
+                winner = winners[0]
+                clean_high.append(winner)
+                beaten = ", ".join(f'"{m.source_col}" ({m.score:.0f})' for m in losers)
+                winner_notes[winner.source_col] = f"conflict resolved — beat {beaten}"
+                for loser in losers:
+                    loser.conflict_note = (
+                        f'conflict: "{master_col}" taken by '
+                        f'"{winner.source_col}" ({winner.score:.0f})'
+                    )
+                    loser.master_col = None  # original target is taken; no suggestion
+                    bumped.append(loser)
+            else:
+                # Tie — all competing columns go to manual review
+                for m in group_sorted:
+                    m.conflict_note = f'conflict: tied for "{master_col}"'
+                    m.master_col = None
+                    bumped.append(m)
+
+    # Bumped columns appear first in the review table so they're easy to spot
+    low = bumped + low
+
     # ── Auto-accept high-confidence matches ──────────────────────────────────
-    if high:
+    if clean_high:
+        has_notes = bool(winner_notes)
         auto_table = Table(title="Auto-accepted (score ≥ 80)", show_lines=True)
         auto_table.add_column("Source Column", style="cyan", no_wrap=True)
         auto_table.add_column("Master Column", style="green", no_wrap=True)
         auto_table.add_column("Score", justify="right", style="green")
-        for m in high:
+        if has_notes:
+            auto_table.add_column("Note", style="yellow")
+        for m in clean_high:
             mapping[m.source_col] = m.master_col
-            auto_table.add_row(m.source_col, m.master_col, f"{m.score:.0f}")
+            if has_notes:
+                auto_table.add_row(
+                    m.source_col, m.master_col, f"{m.score:.0f}",
+                    winner_notes.get(m.source_col, ""),
+                )
+            else:
+                auto_table.add_row(m.source_col, m.master_col, f"{m.score:.0f}")
             logger.debug("Auto-accepted | %r -> %r score=%.0f", m.source_col, m.master_col, m.score)
         console.print()
         console.print(auto_table)
 
-    # ── Handle low-confidence / no-match columns ─────────────────────────────
+    # ── Handle low-confidence / no-match / bumped columns ────────────────────
     if low:
-        console.print("\n[bold]Low-confidence matches (score < 80) — review required:[/bold]")
+        n_bumped = len(bumped)
+        n_low = len(low) - n_bumped
+        if n_bumped and n_low:
+            console.print(
+                f"\n[bold]Review required:[/bold] [yellow]{n_bumped}[/yellow] conflict(s) "
+                f"bumped from auto-accept + [yellow]{n_low}[/yellow] low-confidence match(es)."
+            )
+        elif n_bumped:
+            console.print(
+                f"\n[bold]Review required:[/bold] [yellow]{n_bumped}[/yellow] column(s) "
+                f"bumped from auto-accept due to conflicts."
+            )
+        else:
+            console.print("\n[bold]Low-confidence matches (score < 80) — review required:[/bold]")
+
+        has_conflict_notes = any(m.conflict_note for m in low)
         low_table = Table(show_lines=True)
         low_table.add_column("#", justify="right", style="dim")
         low_table.add_column("Source Column", style="cyan", no_wrap=True)
         low_table.add_column("Suggested Master Column", no_wrap=True)
         low_table.add_column("Score", justify="right")
+        if has_conflict_notes:
+            low_table.add_column("Note", style="yellow")
 
         for i, m in enumerate(low):
             if m.master_col is None:
@@ -245,7 +331,10 @@ def confirm_column_mapping(
             else:
                 master_label = f"[red]{m.master_col}[/red]"
                 score_label  = f"[red]{m.score:.0f}[/red]"
-            low_table.add_row(str(i), m.source_col, master_label, score_label)
+            if has_conflict_notes:
+                low_table.add_row(str(i), m.source_col, master_label, score_label, m.conflict_note)
+            else:
+                low_table.add_row(str(i), m.source_col, master_label, score_label)
 
         console.print(low_table)
         console.print(
@@ -253,30 +342,35 @@ def confirm_column_mapping(
             "[bold]all[/bold] to include all, or [bold]none[/bold] to skip all: "
         )
 
-        while True:
-            raw = input("  Your choice: ").strip().lower()
-            if not raw:
-                console,print(" Your choice: ").strip().lower()
-            if raw == "none":
-                selected_low: list[ColumnMatch] = []
-                break
-            if raw == "all":
-                selected_low = low
-                break
-            parts = [p.strip() for p in raw.split(",") if p.strip()]
-            valid = True
-            indices: list[int] = []
-            for part in parts:
-                if part.isdigit() and 0 <= int(part) < len(low):
-                    indices.append(int(part))
-                else:
-                    console.print(f"  [red]'{part}' is not a valid index (0-{len(low)-1}).[/red]")
-                    valid = False
+        try:
+            while True:
+                raw = input("  Your choice: ").strip().lower()
+                if not raw:
+                    console.print("  [red]No input provided. Try again.[/red]")
+                    continue
+                if raw == "none":
+                    selected_low: list[ColumnMatch] = []
                     break
-            if valid and indices:
-                seen: set[int] = set()
-                selected_low = [low[i] for i in indices if not (i in seen or seen.add(i))]
-                break
+                if raw == "all":
+                    selected_low = low
+                    break
+                parts = [p.strip() for p in raw.split(",") if p.strip()]
+                valid = True
+                indices: list[int] = []
+                for part in parts:
+                    if part.isdigit() and 0 <= int(part) < len(low):
+                        indices.append(int(part))
+                    else:
+                        console.print(f"  [red]'{part}' is not a valid index (0-{len(low)-1}).[/red]")
+                        valid = False
+                        break
+                if valid and indices:
+                    seen: set[int] = set()
+                    selected_low = [low[i] for i in indices if not (i in seen or seen.add(i))]
+                    break
+        except EOFError:
+            console.print("\n[red]Input closed unexpectedly. Exiting.[/red]")
+            sys.exit(1)
 
         if selected_low:
             console.print(
@@ -302,17 +396,19 @@ def confirm_column_mapping(
         console.print("  [yellow]No columns mapped — nothing will be appended.[/yellow]")
 
     logger.info("Column mapping confirmed | mapped=%d total=%d", len(mapping), len(matches))
-    seen_targets: dict[str, str ] = {}
+    # Safety net: catch duplicate targets introduced during manual review
+    # (e.g. user typed the same master column name for two different source cols).
+    seen_targets: dict[str, str] = {}
     for src, dst in list(mapping.items()):
-            if dst in seen_targets:
-                    console.print(
-                        f"  [yellow]Warning: [/yellow] '[cyan]{src}[/cyan]' and "
-                        f" '[cyan]{seen_targets[dst]}[/cyan]' both map to '[cyan]{dst}[/cyan]'. "
-                        f" '[cyan]{src}[/cyan]' will be skipped"
-                    )
-                    del mapping[src]
-            else:
-                    seen_targets[dst] = src
+        if dst in seen_targets:
+            console.print(
+                f"  [yellow]Warning:[/yellow] '[cyan]{src}[/cyan]' and "
+                f"'[cyan]{seen_targets[dst]}[/cyan]' both map to '[cyan]{dst}[/cyan]'. "
+                f"'[cyan]{src}[/cyan]' will be skipped."
+            )
+            del mapping[src]
+        else:
+            seen_targets[dst] = src
     return mapping
 
 

@@ -18,12 +18,16 @@ Known limitations:
 
 import logging
 import os
+import re
 from pathlib import Path
 from typing import Optional
 
 import pandas as pd
 
 logger = logging.getLogger(__name__)
+
+# Matches the timestamp suffix appended by append_to_master: _YYYY-MM-DD_HH-MM-SS
+_TIMESTAMPED_RE = re.compile(r"_\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}$")
 
 
 def load_source_file(path: str | Path) -> pd.DataFrame:
@@ -60,12 +64,15 @@ def load_source_file(path: str | Path) -> pd.DataFrame:
                 print("Multiple sheets found:")
                 for i, name in enumerate(sheet_names):
                     print(f"  [{i}] {name}")
-                while True:
-                    raw = input("Select sheet index: ").strip()
-                    if raw.isdigit() and int(raw) < len(sheet_names):
-                        sheet = sheet_names[int(raw)]
-                        break
-                    print(f"  Enter a number between 0 and {len(sheet_names) - 1}.")
+                try:
+                    while True:
+                        raw = input("Select sheet index: ").strip()
+                        if raw.isdigit() and int(raw) < len(sheet_names):
+                            sheet = sheet_names[int(raw)]
+                            break
+                        print(f"  Enter a number between 0 and {len(sheet_names) - 1}.")
+                except EOFError:
+                    raise RuntimeError("Input closed unexpectedly during sheet selection.") from None
                 logger.debug("User selected sheet | sheet=%s", sheet)
             df = pd.read_excel(xf, sheet_name=sheet, engine="openpyxl", parse_dates=False)
 
@@ -97,7 +104,13 @@ def load_source_file(path: str | Path) -> pd.DataFrame:
 
 def find_latest_master(folder: str | Path) -> Optional[Path]:
     """
-    Return the most recently modified CSV, or excel or None if none exist.
+    Return the most recently modified master CSV or Excel file in folder, or None.
+
+    Excludes:
+    - Office lock files (names starting with ~$)
+    - Pipeline output files (stems ending with _YYYY-MM-DD_HH-MM-SS), which are
+      outputs from prior runs — selecting them would cause the stem to grow
+      indefinitely on each subsequent run.
 
     Uses mtime (modification time). Files touched with a backdated mtime may
     cause the wrong file to be selected — acceptable for this pipeline's use case.
@@ -106,15 +119,26 @@ def find_latest_master(folder: str | Path) -> Optional[Path]:
         folder: Directory to search.
 
     Returns:
-        Path to the newest .csv or .xlsx file, or None.
+        Path to the newest eligible .csv or .xlsx file, or None.
     """
     folder = Path(folder)
-    candidates = list(folder.glob("*.csv")) + list(folder.glob("*.xlsx"))
+    all_files = list(folder.glob("*.csv")) + list(folder.glob("*.xlsx"))
+    candidates = [
+        p for p in all_files
+        if not p.name.startswith("~$")
+        and not _TIMESTAMPED_RE.search(p.stem)
+    ]
     if not candidates:
-        logger.warning("No master candidates found | folder=%s", folder)
+        logger.warning(
+            "No master candidates found | folder=%s total_files=%d excluded=%d",
+            folder, len(all_files), len(all_files) - len(candidates),
+        )
         return None
     latest = max(candidates, key=lambda p: p.stat().st_mtime)
-    logger.debug("Latest master | path=%s candidates=%d", latest, len(candidates))
+    logger.debug(
+        "Latest master | path=%s candidates=%s",
+        latest, [p.name for p in candidates],
+    )
     return latest
 
 
@@ -123,7 +147,10 @@ def load_master(path: Path) -> pd.DataFrame:
     Load the master file (.csv or .xlsx) into a DataFrame.
 
     Returns an empty DataFrame (no columns) if the file is zero bytes.
-    Delegates to load_source_file() so both formats are handled identically.
+    Does NOT use load_source_file — master files never need interactive sheet
+    selection (they are always single-sheet pipeline outputs), and calling
+    load_source_file would inject an input() prompt that crashes in the
+    Windows EXE environment.
 
     Args:
         path: Path to the master CSV or Excel file.
@@ -137,7 +164,21 @@ def load_master(path: Path) -> pd.DataFrame:
         logger.info("Master file is empty (0 bytes) | path=%s", path)
         return pd.DataFrame()
 
-    df = load_source_file(path)
+    ext = path.suffix.lower()
+    if ext == ".xlsx":
+        df = pd.read_excel(path, sheet_name=0, engine="openpyxl", parse_dates=False)
+        logger.debug("Read master Excel (first sheet) | path=%s", path)
+    elif ext == ".csv":
+        try:
+            df = pd.read_csv(path, encoding="utf-8", parse_dates=False)
+            logger.debug("Read master CSV with utf-8 | path=%s", path)
+        except UnicodeDecodeError:
+            logger.warning(
+                "utf-8 decode failed, falling back to latin-1 | path=%s", path
+            )
+            df = pd.read_csv(path, encoding="latin-1", parse_dates=False)
+    else:
+        raise ValueError(f"Unsupported master file extension '{ext}'. Expected .xlsx or .csv.")
 
     if df.empty and len(df.columns) == 0:
         logger.info("Master parsed but contains no columns | path=%s", path)
@@ -191,10 +232,14 @@ def append_to_master(
         "Writing new master | path=%s total_rows=%d", new_path, len(combined)
     )
     
-    # write to a .tpm file first then atomically renames it to final name in case process crashes mid-write 
     tmp_path = new_path.with_suffix(".tmp")
-    combined.to_csv(tmp_path, index=False)
-    os.replace(tmp_path, new_path)
+    try:
+        combined.to_csv(tmp_path, index=False)
+        os.replace(tmp_path, new_path)
+    except Exception:
+        if tmp_path.exists():
+            tmp_path.unlink()
+        raise
     
 
     logger.info(

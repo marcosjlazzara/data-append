@@ -15,6 +15,7 @@ Normalization note:
 from __future__ import annotations
 
 import logging
+import sys
 from typing import Literal
 
 import pandas as pd
@@ -26,7 +27,10 @@ console = Console()
 
 def normalize_for_comparison(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Return a copy of df with all object-dtype columns stripped and lowercased.
+    Return a copy of df with all string-dtype columns stripped and lowercased.
+
+    Handles both legacy object dtype and pandas StringDtype (introduced in
+    pandas 1.0, now the default for string columns in pandas 2.x+).
 
     This normalises superficial differences (trailing spaces, case) that should
     not prevent duplicate detection.
@@ -41,7 +45,9 @@ def normalize_for_comparison(df: pd.DataFrame) -> pd.DataFrame:
     result = df.copy()
     for col in result.columns:
         col_data = result[col]
-        if isinstance(col_data, pd.Series) and col_data.dtype == object:
+        if isinstance(col_data, pd.Series) and (
+            col_data.dtype == object or isinstance(col_data.dtype, pd.StringDtype)
+        ):
             result[col] = col_data.str.strip().str.lower()
     return result
 
@@ -163,15 +169,19 @@ def prompt_dedup_decision(
     console.print(f"  [2] Skip duplicates — append {new_count} new row(s) only")
     console.print("  [3] Cancel — do not write anything")
 
-    while True:
-        raw = input("\nYour choice [1/2/3]: ").strip()
-        if raw == "1":
-            logger.info("User chose: append_all")
-            return "append_all"
-        if raw == "2":
-            logger.info("User chose: skip_dupes")
-            return "skip_dupes"
-        if raw == "3":
-            logger.info("User chose: cancel")
-            return "cancel"
-        console.print("[red]Enter 1, 2, or 3.[/red]")
+    try:
+        while True:
+            raw = input("\nYour choice [1/2/3]: ").strip()
+            if raw == "1":
+                logger.info("User chose: append_all")
+                return "append_all"
+            if raw == "2":
+                logger.info("User chose: skip_dupes")
+                return "skip_dupes"
+            if raw == "3":
+                logger.info("User chose: cancel")
+                return "cancel"
+            console.print("[red]Enter 1, 2, or 3.[/red]")
+    except EOFError:
+        console.print("\n[red]Input closed unexpectedly. Exiting.[/red]")
+        sys.exit(1)
